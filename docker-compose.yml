@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  
+  postgres:
+    image: postgres:16-alpine
+    container_name:  cloudtask-postgres
+    environment:
+      POSTGRES_DB: cloudtaskdb
+      POSTGRES_USER: cloudtask_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+    - "5432:5432"
+    networks:
+    - cloudtask-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudtask_user -d cloudtaskdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    container_name: cloudtask-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cloudtask-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloudtask-app
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cloudtaskdb
+      SPRING_DATASOURCE_USERNAME: cloudtask_user
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-password123}
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      JWT_SECRETS: ${JWT_SECRET:-defaultSecretKey123456789012345678901234567890}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres: 
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cloudtask-network
+    healthcheck:
+      test: ["CMD", "wget", "no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cloudtask-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - cloudtask-network
+    command: 
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cloudtask-grafana
+    environment:
+        GF_SECURITY_ADMIN_USER: admin
+        GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+        GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - cloudtask-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+networks:
+  cloudtask-network:
+    driver: bridge
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+
+
+    
+
+

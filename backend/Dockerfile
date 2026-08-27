@@ -1,33 +1,29 @@
-FROM eclipse-temurin:17-jdk-alpine AS builder
+# Build stage - Use official Gradle image
+FROM gradle:8.10-jdk17-alpine AS builder
 
 WORKDIR /app
 
-# Copy Gradle wrapper files
-COPY gradle/ gradle/
-COPY build.gradle settings.gradle gradlew ./
-
-# Make gradlew executable
-RUN chmod +x gradlew
-
-# Download dependencies (using build instead of dependencies)
-RUN ./gradlew build -x test --no-daemon || true
-
 # Copy source code
-COPY src/ src/
+COPY . .
 
-# Build the application
-RUN ./gradlew build -x test --no-daemon
+# Build the application (skip tests)
+RUN gradle build -x test --no-daemon
 
+# Runtime stage
 FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
+# Create non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
+# Copy the built JAR from builder
 COPY --from=builder /app/build/libs/*.jar app.jar
 
+# Set ownership
 RUN chown appuser:appgroup app.jar
 
+# Switch to non-root user
 USER appuser
 
 EXPOSE 8080

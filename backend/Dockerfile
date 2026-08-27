@@ -1,4 +1,3 @@
-# Build stage - Use official Gradle image
 FROM gradle:8.10-jdk17-alpine AS builder
 
 WORKDIR /app
@@ -7,23 +6,19 @@ WORKDIR /app
 COPY . .
 
 # Build the application (skip tests)
-RUN gradle build -x test --no-daemon
+RUN gradle build -x test
 
-# Runtime stage
 FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-# Create non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copy the built JAR from builder
+# Copy the built JAR
 COPY --from=builder /app/build/libs/*.jar app.jar
 
-# Set ownership
 RUN chown appuser:appgroup app.jar
 
-# Switch to non-root user
 USER appuser
 
 EXPOSE 8080

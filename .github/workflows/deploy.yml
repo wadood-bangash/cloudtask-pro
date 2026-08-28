@@ -1,72 +1,56 @@
-name: CI/CD Pipeline - Deploy to AWS EC2
+deploy-to-ec2:
+  runs-on: self-hosted
+  if: github.ref == 'refs/heads/main'
+  
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
+    - name: Verify app.jar exists
+      run: |
+        ls -la backend/app.jar
+        echo "✅ app.jar found!"
 
-env:
-  DOCKER_IMAGE: cloudtask-app
+    - name: Build Docker image from pre-built JAR
+      run: |
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/cloudtask-app:latest -f backend/Dockerfile .
 
-jobs:
-  # ============================================
-  # JOB 1: Deploy to AWS EC2 (Using Pre-built JAR)
-  # ============================================
-  deploy-to-ec2:
-    runs-on: self-hosted
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Verify app.jar exists
-        run: |
-          ls -la backend/app.jar
-          echo "✅ app.jar found!"
+    - name: Push Docker image
+      run: |
+        docker push ${{ secrets.DOCKER_USERNAME }}/cloudtask-app:latest
 
-      - name: Build Docker image from pre-built JAR
-        run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest -f backend/Dockerfile .
+    - name: Pull latest Docker image on EC2
+      run: |
+        docker pull ${{ secrets.DOCKER_USERNAME }}/cloudtask-app:latest
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+    - name: Stop and remove old container
+      run: |
+        docker stop cloudtask-app-prod || true
+        docker rm cloudtask-app-prod || true
 
-      - name: Push Docker image
-        run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
+    - name: Run new container
+      run: |
+        docker run -d \
+          --name cloudtask-app-prod \
+          -p 8080:8080 \
+          -e SPRING_PROFILES_ACTIVE=prod \
+          -e SPRING_MAIN_ALLOW_CIRCULAR_REFERENCES=true \
+          -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/cloudtaskdb \
+          -e SPRING_DATASOURCE_USERNAME=cloudtask_user \
+          -e SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }} \
+          -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+          -e SPRING_REDIS_HOST=redis \
+          -e SPRING_REDIS_PORT=6379 \
+          --restart unless-stopped \
+          ${{ secrets.DOCKER_USERNAME }}/cloudtask-app:latest
 
-      - name: Pull latest Docker image on EC2
-        run: |
-          docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
-
-      - name: Stop and remove old container
-        run: |
-          docker stop cloudtask-app-prod || true
-          docker rm cloudtask-app-prod || true
-
-      - name: Run new container
-        run: |
-          docker run -d \
-            --name cloudtask-app-prod \
-            -p 8080:8080 \
-            -e SPRING_PROFILES_ACTIVE=prod \
-            -e SPRING_MAIN_ALLOW_CIRCULAR_REFERENCES=true \
-            -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/cloudtaskdb \
-            -e SPRING_DATASOURCE_USERNAME=cloudtask_user \
-            -e SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }} \
-            -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-            -e SPRING_REDIS_HOST=redis \
-            -e SPRING_REDIS_PORT=6379 \
-            --restart unless-stopped \
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
-
-      - name: Verify deployment
-        run: |
-          docker ps | grep cloudtask-app-prod
-          echo "✅ Deployment successful!"
+    - name: Verify deployment
+      run: |
+        docker ps | grep cloudtask-app-prod
+        echo "✅ Deployment successful!"

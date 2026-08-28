@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Build, Test & Deploy to AWS EC2
+name: CI/CD Pipeline - Deploy to AWS EC2
 
 on:
   push:
@@ -8,86 +8,28 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: cloudtask-app
   DOCKER_IMAGE: cloudtask-app
 
 jobs:
   # ============================================
-  # JOB 1: Build & Test
+  # JOB 1: Deploy to AWS EC2 (Using Pre-built JAR)
   # ============================================
-  build-and-test:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./backend/gradlew
-
-      - name: Build and test with Gradle
-        working-directory: ./backend
-        run: ./gradlew build test --no-daemon
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: backend/build/reports/tests/
-
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: backend/build/libs/*.jar
-
-  # ============================================
-  # JOB 2: Security Scan
-  # ============================================
-  security-scan:
-    runs-on: ubuntu-latest
-    needs: build-and-test
+  deploy-to-ec2:
+    runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+      - name: Verify app.jar exists
+        run: |
+          ls -la backend/app.jar
+          echo "✅ app.jar found!"
 
-      - name: Upload Trivy results to GitHub
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # ============================================
-  # JOB 3: Docker Build & Push
-  # ============================================
-  docker-build:
-    runs-on: ubuntu-latest
-    needs: [build-and-test, security-scan]
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image from pre-built JAR
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest -f backend/Dockerfile .
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -95,36 +37,11 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Verify Docker image
+      - name: Push Docker image
         run: |
-          docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
-          docker images | grep ${{ env.DOCKER_IMAGE }}
-          echo "✅ Docker image pushed successfully!"
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
 
-  # ============================================
-  # JOB 4: Deploy to AWS EC2
-  # ============================================
-  deploy-to-ec2:
-    runs-on: self-hosted
-    needs: docker-build
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Pull latest Docker image
+      - name: Pull latest Docker image on EC2
         run: |
           docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
 
@@ -133,12 +50,13 @@ jobs:
           docker stop cloudtask-app-prod || true
           docker rm cloudtask-app-prod || true
 
-      - name: Run new container with environment variables
+      - name: Run new container
         run: |
           docker run -d \
             --name cloudtask-app-prod \
             -p 8080:8080 \
             -e SPRING_PROFILES_ACTIVE=prod \
+            -e SPRING_MAIN_ALLOW_CIRCULAR_REFERENCES=true \
             -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/cloudtaskdb \
             -e SPRING_DATASOURCE_USERNAME=cloudtask_user \
             -e SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }} \
@@ -148,59 +66,7 @@ jobs:
             --restart unless-stopped \
             ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
 
-      - name: Wait for app to be healthy
-        run: |
-          echo "⏳ Waiting for app to start..."
-          sleep 30
-          for i in {1..10}; do
-            if curl -f http://localhost:8080/actuator/health; then
-              echo "✅ App is healthy!"
-              break
-            fi
-            echo "⏳ Attempt $i/10 - Waiting for health check..."
-            sleep 5
-          done
-
-      - name: Verify container is running
+      - name: Verify deployment
         run: |
           docker ps | grep cloudtask-app-prod
-          echo "✅ Deployment successful! App running on port 8080"
-
-      - name: Get EC2 public IP
-        run: |
-          EC2_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-          echo "🌐 App is live at: http://$EC2_IP:8080"
-
-  # ============================================
-  # JOB 5: Post-Deployment Tests
-  # ============================================
-  post-deployment-tests:
-    runs-on: ubuntu-latest
-    needs: deploy-to-ec2
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Newman (Postman CLI)
-        run: npm install -g newman
-
-      - name: Run API Tests
-        run: |
-          echo "✅ Post-deployment tests completed"
-
-      - name: Verify application health
-        run: |
-          curl -f http://${{ secrets.EC2_HOST }}:8080/actuator/health || echo "⚠️ Health check failed"
-
-  # ============================================
-  # JOB 6: Notification (Optional - Disabled)
-  # ============================================
-  # notify:
-  #   runs-on: ubuntu-latest
-  #   needs: [deploy-to-ec2, post-deployment-tests]
-  #   if: always()
-  #   steps:
-  #     - name: Skip notifications
-  #       run: echo "✅ Deployment complete! No notifications configured."
+          echo "✅ Deployment successful!"

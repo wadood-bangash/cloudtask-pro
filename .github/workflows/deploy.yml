@@ -181,19 +181,19 @@ jobs:
         run: |
           curl -f http://${{ secrets.EC2_HOST }}:8080/actuator/health || echo "⚠️ Health check failed"
 
-  notify:
-    runs-on: ubuntu-latest
-    needs: [deploy-to-ec2, post-deployment-tests]
-    if: always()
+ # notify:
+   # runs-on: ubuntu-latest
+  #  needs: [deploy-to-ec2, post-deployment-tests]
+  #  if: always()
     
-    steps:
-      - name: Send notification to Slack
-        if: ${{ secrets.SLACK_WEBHOOK_URL }}
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow
-          text: |
+   # steps:
+     # - name: Send notification to Slack
+    #    if: ${{ secrets.SLACK_WEBHOOK_URL }}
+     #   uses: 8398a7/action-slack@v3
+   #     with:
+  #        status: ${{ job.status }}
+ #         fields: repo,message,commit,author,action,eventName,ref,workflow
+#          text: |
             🚀 Deployment Status: ${{ job.status }}
             📦 Repository: ${{ github.repository }}
             🔑 Commit: ${{ github.sha }}

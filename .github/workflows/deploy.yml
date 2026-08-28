@@ -13,20 +13,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker image
+      - name: Build and Run Docker container
         run: |
-          docker build -t wadoodbangash/cloudtask-app:latest -f backend/Dockerfile .
-
-      - name: Push to Docker Hub
-        run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "wadoodbangash" --password-stdin
-          docker push wadoodbangash/cloudtask-app:latest
-
-      - name: Deploy on EC2
-        run: |
-          docker pull wadoodbangash/cloudtask-app:latest
           docker stop cloudtask-app-prod || true
           docker rm cloudtask-app-prod || true
+          docker build -t cloudtask-app:latest -f backend/Dockerfile .
           docker run -d \
             --name cloudtask-app-prod \
             -p 8080:8080 \
@@ -36,7 +27,7 @@ jobs:
             -e SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }} \
             -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
             --restart unless-stopped \
-            wadoodbangash/cloudtask-app:latest
+            cloudtask-app:latest
 
       - name: Verify
         run: |
